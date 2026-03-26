@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ESA Remote Sensing & Random Forest - Technical Reference & Field Guide</title>
+<title>Remote Sensing Playbook</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   tailwind.config = {
@@ -116,8 +116,8 @@ const {
 // ============================================================
 
 const SPECTRUM_REGIONS = [
-  { name: 'Blue',     label: 'B',      start: 450,  end: 520,  color: '#3b82f6', desc: 'Atmospheric scattering, water penetration, coastal mapping' },
-  { name: 'Green',    label: 'G',      start: 520,  end: 600,  color: '#22c55e', desc: 'Peak vegetation reflectance in visible, water quality' },
+  { name: 'Blue',     label: 'B',      start: 450,  end: 520,  color: '#3b82f6', desc: 'Penetrates clear water for depth/substrate mapping; blocked by turbid/sediment-loaded water. Coastal and bathymetric mapping.' },
+  { name: 'Green',    label: 'G',      start: 520,  end: 600,  color: '#22c55e', desc: 'Peak vegetation reflectance; turbid water reflects more strongly here than clear water — used in turbidity and chlorophyll indices.' },
   { name: 'Red',      label: 'R',      start: 600,  end: 690,  color: '#ef4444', desc: 'Chlorophyll absorption, vegetation discrimination' },
   { name: 'Red Edge', label: 'RE',     start: 690,  end: 750,  color: '#f97316', desc: 'Transition zone, sensitive to chlorophyll & plant health' },
   { name: 'NIR',      label: 'NIR',    start: 750,  end: 1000, color: '#a855f7', desc: 'Vegetation structure, biomass, land/water boundary' },
@@ -145,7 +145,8 @@ const SENSOR_BANDS = {
     { name: 'B5', center: 865, width: 28, res: '30m', region: 'NIR' },
     { name: 'B6', center: 1609, width: 85, res: '30m', region: 'SWIR-1' },
     { name: 'B7', center: 2201, width: 187, res: '30m', region: 'SWIR-2' },
-    { name: 'B10', center: 10895, width: 590, res: '100m', region: 'Thermal' },
+    { name: 'B10 (TIRS-1)', center: 10895, width: 590, res: '100m', region: 'Thermal ~10.8μm' },
+    { name: 'B11 (TIRS-2)', center: 12005, width: 1000, res: '100m', region: 'Thermal ~12.0μm' },
   ],
   'NAIP': [
     { name: 'R', center: 635, width: 100, res: '0.6m', region: 'Red' },
@@ -176,9 +177,10 @@ const SPECTRAL_SIGS = {
     'Deciduous Forest':  { color: '#52b788', values: [0.03, 0.08, 0.04, 0.08, 0.40, 0.45, 0.20, 0.08, 0.07] },
     'Shrub':             { color: '#95d5b2', values: [0.04, 0.07, 0.05, 0.08, 0.32, 0.35, 0.18, 0.07, 0.06] },
     'Grass/Herbaceous':  { color: '#a7c957', values: [0.04, 0.10, 0.06, 0.10, 0.42, 0.48, 0.25, 0.10, 0.09] },
-    'Water':             { color: '#457b9d', values: [0.06, 0.05, 0.03, 0.02, 0.01, 0.01, 0.00, 0.00, 0.00] },
-    'Algal Bloom':       { color: '#06d6a0', values: [0.04, 0.14, 0.05, 0.10, 0.20, 0.15, 0.03, 0.01, 0.01] },
     'Bare Soil':         { color: '#d4a373', values: [0.10, 0.15, 0.20, 0.22, 0.25, 0.30, 0.35, 0.30, 0.28] },
+    'Clear Water':       { color: '#457b9d', values: [0.06, 0.05, 0.03, 0.02, 0.01, 0.01, 0.00, 0.00, 0.00] },
+    'Turbid Water':      { color: '#a07850', values: [0.05, 0.09, 0.10, 0.09, 0.06, 0.04, 0.01, 0.00, 0.00] },
+    'Algal Bloom':       { color: '#06d6a0', values: [0.04, 0.14, 0.05, 0.10, 0.20, 0.15, 0.03, 0.01, 0.01] },
   }
 };
 
@@ -191,7 +193,8 @@ const INDEX_DEFS = {
   'MSAVI2': { formula: '(2*NIR + 1 - sqrt((2*NIR+1)^2 - 8*(NIR-Red))) / 2', bands: ['NIR', 'Red'], calc: (b) => (2*b.NIR + 1 - Math.sqrt(Math.max(0, Math.pow(2*b.NIR+1, 2) - 8*(b.NIR-b.Red)))) / 2, desc: 'Self-adjusting soil correction.', bestFor: 'Variable canopy density', limitations: 'More complex computation' },
   'NDMI':  { formula: '(NIR - SWIR1) / (NIR + SWIR1)', bands: ['NIR', 'SWIR1'], calc: (b) => (b.NIR - b.SWIR1) / (b.NIR + b.SWIR1 + 0.0001), desc: 'Canopy moisture content.', bestFor: 'Drought/stress monitoring, wetlands', limitations: 'Needs SWIR band (20m on S2)' },
   'NBR':   { formula: '(NIR - SWIR2) / (NIR + SWIR2)', bands: ['NIR', 'SWIR2'], calc: (b) => (b.NIR - b.SWIR2) / (b.NIR + b.SWIR2 + 0.0001), desc: 'Burn severity / major disturbance.', bestFor: 'Fire damage assessment', limitations: 'Needs SWIR2 band' },
-  'NDWI':  { formula: '(Green - NIR) / (Green + NIR)', bands: ['Green', 'NIR'], calc: (b) => (b.Green - b.NIR) / (b.Green + b.NIR + 0.0001), desc: 'Open water detection.', bestFor: 'Water body mapping, flood extent', limitations: 'Can confuse shadows with water' },
+  'NDWI':  { formula: '(Green - NIR) / (Green + NIR)', bands: ['Green', 'NIR'], calc: (b) => (b.Green - b.NIR) / (b.Green + b.NIR + 0.0001), desc: 'Open water detection. Clear water strongly absorbs NIR, so high NDWI = water present.', bestFor: 'Water body mapping, flood extent', limitations: 'Can confuse shadows with water; less reliable in highly turbid conditions' },
+  'NDTI':  { formula: '(Red - Green) / (Red + Green)', bands: ['Red', 'Green'], calc: (b) => (b.Red - b.Green) / (b.Red + b.Green + 0.0001), desc: 'Normalized Difference Turbidity Index. Turbid/sediment-loaded water reflects more in red than green; clear water does the opposite. Higher NDTI = higher suspended sediment load.', bestFor: 'Sediment plumes, post-storm runoff, river turbidity monitoring, dredging impact zones', limitations: 'Requires atmospheric correction; affected by bottom reflectance in shallow water; not sensitive to dissolved organics (CDOM)' },
   'NDRE':  { formula: '(RedEdge - Red) / (RedEdge + Red)', bands: ['RedEdge', 'Red'], calc: (b) => ((b.RedEdge||0.12) - b.Red) / ((b.RedEdge||0.12) + b.Red + 0.0001), desc: 'More chlorophyll-sensitive than NDVI at moderate-high canopy densities; uses the Red Edge transition zone.', bestFor: 'Canopy chlorophyll content, plant health (Sentinel-2 B5/B4)', limitations: 'Requires Red Edge band, Sentinel-2, RapidEye, or similar. Not available on Landsat or NAIP.' },
   'BSI':   { formula: '(SWIR1 + Red − NIR − Blue) / (SWIR1 + Red + NIR + Blue)', bands: ['SWIR1', 'Red', 'NIR', 'Blue'], calc: (b) => (b.SWIR1 + b.Red - b.NIR - b.Blue) / (b.SWIR1 + b.Red + b.NIR + b.Blue + 0.0001), desc: 'Highlights exposed mineral soil. High BSI = disturbed/bare ground; low BSI = vegetated or wet.', bestFor: 'Construction monitoring, erosion mapping, post-disturbance bare ground tracking', limitations: 'Sparse desert shrubland can mimic bare soil; verify with field data' },
   'PSRI':  { formula: '(Red − Green) / RedEdge', bands: ['Red', 'Green', 'RedEdge'], calc: (b) => (b.Red - b.Green) / ((b.RedEdge||0.12) + 0.0001), desc: 'Carotenoid:chlorophyll ratio proxy. Rises during senescence as chlorophyll breaks down and carotenoids dominate.', bestFor: 'Senescence timing, fall phenology mapping, drought/stress-induced early aging detection', limitations: 'Requires Red Edge band; range varies strongly across cover types, use relative not absolute thresholds' },
@@ -200,7 +203,8 @@ const INDEX_DEFS = {
 const BAND_PRESETS = {
   'Healthy Forest':   { Blue: 0.02, Green: 0.05, Red: 0.03, RedEdge: 0.15, NIR: 0.40, SWIR1: 0.15, SWIR2: 0.05 },
   'Stressed Veg':     { Blue: 0.04, Green: 0.07, Red: 0.10, RedEdge: 0.08, NIR: 0.25, SWIR1: 0.25, SWIR2: 0.15 },
-  'Water':            { Blue: 0.06, Green: 0.04, Red: 0.03, RedEdge: 0.01, NIR: 0.01, SWIR1: 0.00, SWIR2: 0.00 },
+  'Clear Water':      { Blue: 0.06, Green: 0.04, Red: 0.03, RedEdge: 0.01, NIR: 0.01, SWIR1: 0.00, SWIR2: 0.00 },
+  'Turbid Water':     { Blue: 0.05, Green: 0.09, Red: 0.10, RedEdge: 0.09, NIR: 0.06, SWIR1: 0.01, SWIR2: 0.00 },
   'Bare Soil':        { Blue: 0.10, Green: 0.15, Red: 0.20, RedEdge: 0.22, NIR: 0.25, SWIR1: 0.35, SWIR2: 0.30 },
 };
 
@@ -231,7 +235,7 @@ const SENSOR_SCATTER_DATA = [
   { name: 'Landsat 8/9', x: 30, y: 45,  z: 11, cost: 'Free',       color: '#F9A134' },  // ~8-day → 45/yr
   { name: 'NAIP',        x: 0.6, y: 0.4, z: 4, cost: 'Free (US)',  color: '#8FCEA5' },  // ~2.5-yr cycle → 0.4/yr
   { name: 'Planet',      x: 3,  y: 365,  z: 4, cost: 'Commercial', color: '#f97316' },  // daily → 365/yr
-  // LiDAR omitted — project-acquired on demand, no satellite revisit cadence
+  // LiDAR omitted; project-acquired on demand, no satellite revisit cadence
 ];
 
 // Sample feature importance data
@@ -283,8 +287,11 @@ const GLOSSARY = [
   { term: 'MDA (Permutation Importance)', def: 'Mean Decrease in Accuracy. Drop in accuracy when a feature is shuffled. More reliable than MDI, slower. Preferred for reporting.', cat: 'RF Model', section: 8 },
   { term: 'NDMI', def: 'Normalized Difference Moisture Index. (NIR - SWIR1) / (NIR + SWIR1). Detects canopy/vegetation moisture content.', cat: 'Indices', section: 3 },
   { term: 'NDVI', def: 'Normalized Difference Vegetation Index. (NIR - Red) / (NIR + Red). Most common vegetation index. Measures general greenness.', cat: 'Indices', section: 3 },
-  { term: 'NDWI', def: 'Normalized Difference Water Index. (Green - NIR) / (Green + NIR). Detects open water bodies.', cat: 'Indices', section: 3 },
+  { term: 'NDWI', def: 'Normalized Difference Water Index. (Green - NIR) / (Green + NIR). Detects open water bodies. High values = clear open water; less reliable when turbidity is very high.', cat: 'Indices', section: 3 },
+  { term: 'NDTI', def: 'Normalized Difference Turbidity Index. (Red - Green) / (Red + Green). Higher values indicate more suspended sediment. Turbid water reflects more in red than green; clear water does the opposite.', cat: 'Indices', section: 3 },
   { term: 'NIR (Near-Infrared)', def: 'Electromagnetic radiation ~750-1000nm. Healthy vegetation is highly reflective in NIR. Foundation of most vegetation indices.', cat: 'Bands', section: 1 },
+  { term: 'LST (Land Surface Temperature)', def: 'Land Surface Temperature. Derived from Landsat TIRS thermal bands (B10/B11) using the split-window or single-channel algorithm. Measures emitted heat from the ground surface, not air temperature. Used for urban heat island mapping, stream temperature proxies, and wildfire detection.', cat: 'Bands', section: 1 },
+  { term: 'TIR (Thermal Infrared)', def: 'Thermal Infrared. Electromagnetic radiation ~8,000-14,000nm. Unlike optical bands (which measure reflected sunlight), TIR sensors measure heat emitted by surface materials. Landsat 8/9 TIRS bands capture this. Key for Land Surface Temperature (LST) products.', cat: 'Bands', section: 1 },
   { term: 'OOB (Out-of-Bag)', def: 'The ~37% of training samples not selected by a bootstrap draw. Used as built-in validation without needing a separate holdout set.', cat: 'RF Model', section: 5 },
   { term: 'Overfitting', def: 'When the model learns noise rather than signal. Great on training data, poor on new data. Controlled by depth limits, leaf size, and tree count.', cat: 'RF Model', section: 6 },
   { term: 'Precision (User\'s Accuracy)', def: 'Of everything we predicted as class X, what fraction truly is X? High precision = few false positives. "When the model says it, you can trust it."', cat: 'Accuracy', section: 7 },
@@ -407,7 +414,7 @@ function Section0() {
         }} />
         <div style={{ position: 'relative', zIndex: 2, padding: '0 44px', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 8 }}>
           <div style={{ fontSize: 34, fontWeight: 800, color: '#fff', letterSpacing: -0.5, lineHeight: 1.15 }}>
-            Remote Sensing &amp; Random Forest
+            Remote Sensing Playbook
           </div>
           <div style={{ fontSize: 18, color: '#66CAD8', fontWeight: 500 }}>
             Technical Reference &amp; Field Guide
@@ -479,7 +486,7 @@ function Section0() {
 // ============================================================
 function Section1() {
   const [activeSensors, setActiveSensors] = React.useState({ 'Sentinel-2': true });
-  const [activeSigs, setActiveSigs] = React.useState({ 'Conifer Forest': true, 'Deciduous Forest': true, 'Water': true, 'Bare Soil': true });
+  const [activeSigs, setActiveSigs] = React.useState({ 'Conifer Forest': true, 'Deciduous Forest': true, 'Clear Water': true, 'Bare Soil': true });
 
   const toggleSensor = (s) => setActiveSensors(prev => ({ ...prev, [s]: !prev[s] }));
   const toggleSig = (s) => setActiveSigs(prev => ({ ...prev, [s]: !prev[s] }));
@@ -504,13 +511,14 @@ function Section1() {
   });
 
   const bandCards = [
-    { name: 'Blue', range: '450-520 nm', detects: 'Atmosphere, water depth', use: 'Coastal/bathymetric mapping', color: '#3b82f6' },
-    { name: 'Green', range: '520-600 nm', detects: 'Vegetation reflectance peak', use: 'Water quality, general mapping', color: '#22c55e' },
-    { name: 'Red', range: '600-690 nm', detects: 'Chlorophyll absorption', use: 'Vegetation health, species ID', color: '#ef4444' },
-    { name: 'Red Edge', range: '690-750 nm', detects: 'Chlorophyll transition zone', use: 'Plant stress, species distinction', color: '#f97316' },
-    { name: 'NIR', range: '750-1000 nm', detects: 'Cell structure, biomass', use: 'Vegetation indices, land/water', color: '#a855f7' },
-    { name: 'SWIR-1', range: '1500-1750 nm', detects: 'Leaf/soil moisture', use: 'Wetlands, drought stress, snow/ice mapping', color: '#ec4899' },
-    { name: 'SWIR-2', range: '2000-2350 nm', detects: 'Water in leaves, minerals', use: 'Burn severity, geology', color: '#f43f5e' },
+    { name: 'Blue',       range: '450–520 nm',       detects: 'Penetrates clear water; blocked by suspended sediment', use: 'Coastal & bathymetric mapping, turbidity screening', color: '#3b82f6' },
+    { name: 'Green',      range: '520–600 nm',       detects: 'Peak vegetation reflectance; turbid water reflects stronger here than clear water', use: 'Water quality, NDTI turbidity index, chlorophyll, general mapping', color: '#22c55e' },
+    { name: 'Red',        range: '600–690 nm',       detects: 'Chlorophyll absorption; elevated reflectance in sediment-loaded water', use: 'Vegetation health, species ID, NDTI (Red vs. Green)', color: '#ef4444' },
+    { name: 'Red Edge',   range: '690–750 nm',       detects: 'Rapid chlorophyll transition zone; highly sensitive to plant stress', use: 'Canopy health, species distinction, early stress detection', color: '#f97316' },
+    { name: 'NIR',        range: '750–1000 nm',      detects: 'Cell structure & biomass; water (clear or turbid) absorbs strongly', use: 'Vegetation indices (NDVI, EVI), land/water boundary, NDWI', color: '#a855f7' },
+    { name: 'SWIR-1',     range: '1500–1750 nm',     detects: 'Leaf & soil moisture content', use: 'Wetland mapping, drought & stress monitoring, snow/ice distinction', color: '#ec4899' },
+    { name: 'SWIR-2',     range: '2000–2350 nm',     detects: 'Water in leaf tissue, mineral composition', use: 'Burn severity (NBR, dNBR), geology, post-fire recovery', color: '#f43f5e' },
+    { name: 'Thermal IR', range: '8,000–14,000 nm',  detects: 'Emitted heat from surface materials — measures temperature, not reflected light', use: 'Land Surface Temperature (LST), stream temp proxies, urban heat islands, wildfire hotspot detection. Landsat B10/B11 (TIRS).', color: '#dc2626' },
   ];
 
   return (
@@ -605,11 +613,12 @@ function Section1() {
         <SubHeading>Spectral Signature Explorer</SubHeading>
         <p>Different land cover types reflect light differently at each wavelength. Toggle cover types below to compare their spectral signatures. Notice how vegetation is bright in NIR but dark in red (chlorophyll absorbs red light), while water absorbs almost everything beyond visible wavelengths.</p>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'nowrap', marginBottom: 16, overflowX: 'auto' }}>
           {Object.entries(SPECTRAL_SIGS.types).map(([name, { color }]) => (
             <button key={name} onClick={() => toggleSig(name)}
               style={{
-                padding: '8px 18px', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                whiteSpace: 'nowrap', flexShrink: 0,
                 transition: 'all 0.15s',
                 background: activeSigs[name] ? color : '#f3f4f6',
                 color: activeSigs[name] ? '#fff' : '#6b7280',
@@ -675,7 +684,7 @@ function Section2() {
 
   const sensorTable = [
     { name: 'Sentinel-2', res: '10m (VNIR), 20m (SWIR)', revisit: '5 days', bands: 13, cost: 'Free', avail: 'Global, 2015+', use: 'Primary multispectral workhorse; red edge bands', free: true, highRes: false, weekly: true },
-    { name: 'Landsat 8/9', res: '30m', revisit: '8 days (combined)', bands: 11, cost: 'Free', avail: 'Global, 1972+ archive', use: '40+ yr archive; thermal band; long-term change', free: true, highRes: false, weekly: false },
+    { name: 'Landsat 8/9', res: '30m (VNIR/SWIR), 100m (Thermal)', revisit: '8 days (combined)', bands: 11, cost: 'Free', avail: 'Global, 1972+ archive', use: '40+ yr archive; TIRS thermal bands (B10 ~10.8μm, B11 ~12.0μm) for LST; long-term change', free: true, highRes: false, weekly: false },
     { name: 'NAIP', res: '0.6-1m', revisit: '2-3 year cycle', bands: 4, cost: 'Free (US)', avail: 'US only, 2003+', use: 'High-res base imagery; urban/rural detail', free: true, highRes: true, weekly: false },
     { name: 'Planet', res: '3-5m', revisit: 'Daily', bands: 4, cost: 'Commercial', avail: 'Global, 2016+', use: 'High cadence change detection; monitoring', free: false, highRes: true, weekly: true },
     { name: 'LiDAR', res: 'Sub-meter', revisit: 'One-time collects', bands: 1, cost: 'Varies', avail: 'State portals, USGS', use: 'Canopy height, terrain, structure under canopy', free: false, highRes: true, weekly: false },
@@ -698,21 +707,27 @@ function Section2() {
 
       <Card>
         <SubHeading>Resolution vs. Revisit Tradeoff</SubHeading>
-        <p>Higher spatial resolution generally means less frequent coverage or higher cost. Bubble size = spectral band count. Planet is the commercial outlier — fine resolution <em>and</em> daily cadence. LiDAR is excluded here; it's project-acquired on demand, not a time-series sensor.</p>
+        <p>Higher spatial resolution generally means less frequent coverage or higher cost. Bubble size = spectral band count. Planet is the commercial outlier: fine resolution <em>and</em> daily cadence. LiDAR is excluded here; it's project-acquired on demand, not a time-series sensor.</p>
 
-        <ResponsiveContainer width="100%" height={400}>
-          <ScatterChart margin={{ top: 30, right: 60, left: 10, bottom: 40 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.3} />
-            <XAxis type="number" dataKey="x" name="Resolution" tick={{ fontSize: 14 }} scale="log" domain={[0.1, 100]}
-              label={{ value: 'Spatial Resolution (m, log scale)', position: 'bottom', offset: 5, fontSize: 14, fill: '#94a3b8' }} />
-            <YAxis type="number" dataKey="y" name="Revisit Frequency" tick={{ fontSize: 14 }} scale="log" domain={[0.1, 1000]}
-              label={{ value: 'Revisit Frequency (captures/year, log scale)', angle: -90, position: 'insideLeft', offset: 10, fontSize: 14, fill: '#94a3b8' }} />
-            <ZAxis type="number" dataKey="z" range={[40, 1800]} name="Bands" />
-            <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #475569', borderRadius: 8 }}
-              formatter={(val, name) => [val, name]} />
+        <ResponsiveContainer width="100%" height={340}>
+          <ScatterChart margin={{ top: 24, right: 40, left: 20, bottom: 36 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.4} />
+            <XAxis type="number" dataKey="x" name="Resolution" scale="log" domain={[0.4, 50]}
+              ticks={[0.6, 3, 10, 30]}
+              tickFormatter={v => v + 'm'}
+              tick={{ fontSize: 13, fill: '#64748b' }}
+              label={{ value: 'Spatial Resolution (finer ←)', position: 'bottom', offset: 8, fontSize: 13, fill: '#94a3b8' }} />
+            <YAxis type="number" dataKey="y" name="Revisit Frequency" scale="log" domain={[0.3, 500]}
+              ticks={[0.4, 1, 12, 52, 365]}
+              tickFormatter={v => v >= 300 ? 'Daily' : v >= 40 ? 'Weekly' : v >= 8 ? 'Monthly' : v >= 0.8 ? 'Annual' : '2-yr'}
+              tick={{ fontSize: 13, fill: '#64748b' }}
+              label={{ value: 'Revisit (more frequent ↑)', angle: -90, position: 'insideLeft', offset: 15, fontSize: 13, fill: '#94a3b8' }} />
+            <ZAxis type="number" dataKey="z" range={[60, 1400]} name="Bands" />
+            <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 13 }}
+              formatter={(val, name) => name === 'Resolution' ? [val + 'm', 'Resolution'] : name === 'Revisit Frequency' ? [val + '/yr', 'Revisit'] : [val, name]} />
             {SENSOR_SCATTER_DATA.map((s, i) => (
               <Scatter key={i} name={s.name} data={[s]} fill={s.color}>
-                <LabelList dataKey="name" position="top" style={{ fontSize: 14, fill: '#334155', fontWeight: 600 }} />
+                <LabelList dataKey="name" position="top" style={{ fontSize: 13, fill: '#334155', fontWeight: 600 }} />
               </Scatter>
             ))}
           </ScatterChart>
@@ -747,26 +762,45 @@ function Section2() {
 
         {/* Cross-section diagram */}
         <div style={{ background: '#f1f5f9', borderRadius: 8, padding: 24, margin: '16px 0' }}>
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {[
+          {(() => {
+            const bars = [
               { name: 'DSM', desc: 'Digital Surface Model', detail: 'Top of everything: canopy, buildings, ground', color: '#22c55e', height: 100 },
-              { op: '−' },
               { name: 'DEM', desc: 'Digital Elevation Model', detail: 'Bare earth surface only', color: '#d4a373', height: 40 },
-              { op: '=' },
               { name: 'CHM', desc: 'Canopy Height Model', detail: 'DSM minus DEM = vegetation height', color: '#1193BA', height: 60 },
-            ].map((item, i) => item.op
-              ? <div key={i} style={{ fontSize: 32, fontWeight: 300, color: '#94a3b8', lineHeight: 1, paddingBottom: 48 }}>{item.op}</div>
-              : (
-              <div key={item.name} style={{ textAlign: 'center', width: 160 }}>
-                <div style={{ position: 'relative', height: 120, margin: '0 auto 12px', width: 120 }}>
-                  <div style={{ position: 'absolute', bottom: 0, width: '100%', height: item.height, background: item.color, opacity: 0.3, borderRadius: '4px 4px 0 0' }} />
+            ];
+            const ops = ['−', '='];
+            const BAR_W = 100, OP_W = 52, BAR_H = 110;
+            return (
+              <div style={{ maxWidth: 480, margin: '0 auto' }}>
+                {/* Bar area — single fixed-height container, all bars share same bottom */}
+                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', height: BAR_H }}>
+                  {bars.map((b, i) => (
+                    <React.Fragment key={b.name}>
+                      <div style={{ width: BAR_W, height: b.height, background: b.color, opacity: 0.3, borderRadius: '5px 5px 0 0', border: `2px solid ${b.color}`, borderBottom: 'none', flexShrink: 0 }} />
+                      {i < ops.length && (
+                        <div style={{ width: OP_W, textAlign: 'center', fontSize: 26, fontWeight: 300, color: '#94a3b8', flexShrink: 0, lineHeight: 1, paddingBottom: 6 }}>{ops[i]}</div>
+                      )}
+                    </React.Fragment>
+                  ))}
                 </div>
-                <div style={{ fontSize: 19, fontWeight: 700, color: item.color }}>{item.name}</div>
-                <div style={{ fontSize: 15, color: '#64748b' }}>{item.desc}</div>
-                <div style={{ fontSize: 14, color: '#94a3b8', marginTop: 4 }}>{item.detail}</div>
+                {/* Single shared baseline */}
+                <div style={{ height: 2, background: '#94a3b8', borderRadius: 1 }} />
+                {/* Label row — same column widths as bar row */}
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
+                  {bars.map((b, i) => (
+                    <React.Fragment key={b.name}>
+                      <div style={{ width: BAR_W, textAlign: 'center', flexShrink: 0 }}>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: b.color }}>{b.name}</div>
+                        <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>{b.desc}</div>
+                        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{b.detail}</div>
+                      </div>
+                      {i < ops.length && <div style={{ width: OP_W, flexShrink: 0 }} />}
+                    </React.Fragment>
+                  ))}
+                </div>
               </div>
-            ))}
-          </div>
+            );
+          })()}
           <Formula>{'CHM = DSM - DEM\n\nCanopy Height = (Top of canopy surface) - (Bare earth surface)\n\nExample: DSM at 45m elevation, DEM at 30m → CHM = 15m tree height'}</Formula>
         </div>
       </Card>
@@ -3032,7 +3066,7 @@ function BizSection0() {
         <div style={{ fontSize: 13, fontWeight: 600, color: '#66CAD8', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 8 }}>Module Overview</div>
         <h1 style={{ fontSize: 30, fontWeight: 700, margin: '0 0 12px' }}>Business Development & Outreach</h1>
         <p style={{ fontSize: 16, color: 'rgba(255,255,255,0.85)', maxWidth: 720, lineHeight: 1.7, margin: 0 }}>
-          A strategic reference for ESA practice and regional leaders — to identify where RS/RF capability creates growth within existing client relationships, how to position it in leadership conversations, and who inside ESA to engage. Not a technical manual; a business development lens.
+          A strategic reference for ESA practice and regional leaders, to identify where RS/RF capability creates growth opportunities within existing client relationships, how to position it in leadership conversations, and who inside ESA to engage. Not a technical manual; a business development lens.
         </p>
         <div style={{ display: 'flex', gap: 24, marginTop: 24, flexWrap: 'wrap' }}>
           {[['6','RS Service Areas'],['17','Internal Outreach Contacts'],['6','Client Growth Diagnostics'],['6','Strategic Opportunities']].map(([n,l]) => (
@@ -3046,11 +3080,11 @@ function BizSection0() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16 }}>
         {[
-          { num: '1', title: 'RS Service Portfolio', desc: 'ESA\'s RS/RF capabilities organized as client-facing services — what we deliver, to whom, and with what sensors.' },
+          { num: '1', title: 'RS Service Portfolio', desc: 'ESA\'s RS/RF capabilities organized as client-facing services: what we deliver, to whom, and with what sensors.' },
           { num: '2', title: 'RS Outreach Directory', desc: 'ESA practice, market, and regional leaders with the RS talking points and client targets most relevant to each.' },
           { num: '3', title: 'Strategic Client Conversations', desc: 'Diagnostics for identifying RS growth in existing relationships, differentiators, and responses to leadership-level pushback.' },
-          { num: '4', title: 'RS Growth Opportunities', desc: 'Where ESA has the strongest near- and mid-term potential to expand RS — organized by time horizon and market signal.' },
-          { num: '5', title: 'ESA Case Studies', desc: 'FERC Wetland & Habitat Assessment and WRIA 1 Riparian Characterization — transferable methods and outcomes.' },
+          { num: '4', title: 'RS Growth Opportunities', desc: 'Where ESA has the strongest near- and mid-term potential to expand RS, organized by time horizon and market signal.' },
+          { num: '5', title: 'ESA Case Studies', desc: 'FERC Wetland & Habitat Assessment and WRIA 1 Riparian Characterization, with transferable methods and outcomes.' },
         ].map(c => (
           <a key={c.num} href={`#biz-${c.num}`} style={{ textDecoration: 'none', display: 'block', background: '#fff', borderRadius: 10, padding: '18px 20px', border: '1px solid #e2e8f0', cursor: 'pointer' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
@@ -3168,91 +3202,91 @@ function BizSection2() {
       name: 'Barbra Calantas', title: 'Biological Resources & Land Management Practice Leader',
       category: 'Biological', photo: 'https://esassoc.com/wp-content/uploads/2023/10/BarbraCalantas_square.jpg',
       rsFocus: ['Habitat Suitability Mapping', 'Land Cover Classification', 'Species Distribution Modeling', 'Vegetation Condition'],
-      pitch: 'Your practice\'s biggest constraint on landscape-scale habitat work is field coverage cost. RS lets your team deliver spatially continuous habitat maps over areas no crew can survey cost-effectively — turning the next 50,000-acre Section 7 or HCP study area from a budget problem into a competitive advantage. Which of your active clients has a project scoped field-heavy that RS could change the economics on?',
+      pitch: 'Your practice\'s biggest constraint on landscape-scale habitat work is field coverage cost. RS lets your team deliver spatially continuous habitat maps over areas no crew can survey cost-effectively, turning the next 50,000-acre Section 7 or HCP study area from a budget problem into a competitive advantage. Which of your active clients has a project scoped field-heavy that RS could change the economics on?',
       clients: 'USFWS, NPS, HCP/NCCP permittees, Tribes',
     },
     {
       name: 'Erich Fischer', title: 'Natural Resource Management Market Leader',
       category: 'Biological', photo: 'https://esassoc.com/wp-content/uploads/2021/10/Erich-Fischer_01.jpg',
       rsFocus: ['Fuels & Vegetation Mapping', 'Wildfire Severity (dNBR)', 'Post-Fire Recovery Monitoring', 'Rangeland Condition'],
-      pitch: 'USFS, BLM, and state fire agencies are managing millions of acres they can\'t staff for field monitoring. If you can walk into the next federal contract conversation with a multi-year vegetation and fuel monitoring framework that doesn\'t scale linearly with acreage, you separate yourself from every other firm bidding on the same work. RS is what makes that offer credible at the scale they need.',
-      clients: 'USFS, BLM, State fire agencies, NPS',
+      pitch: 'USFS Sierra Nevada and CAL FIRE are managing tens of millions of acres they can\'t begin to staff for field monitoring; post-fire recovery tracking, fuels mapping, and rangeland condition assessment are all on repeat cycles. If you can walk into the next federal or state contract conversation with a multi-year RS monitoring framework that doesn\'t scale linearly with acreage, you separate yourself from every other firm bidding the same work. RS is what makes that credible at Sierra and Coast Range scales, and the dNBR + annual vegetation time series methodology is ready to deploy.',
+      clients: 'USFS Sierra NF, CAL FIRE, BLM, State fire agencies, NPS',
     },
     {
       name: 'Chris Fitzer', title: 'Fish & Aquatic Science Practice Leader',
       category: 'Water', photo: 'https://esassoc.com/wp-content/uploads/2019/05/Chris-Fitzer_square.jpg',
       rsFocus: ['Riparian Condition Mapping', 'Watershed Vegetation Analysis', 'Stream Temperature Proxies', 'Algal Bloom Detection'],
-      pitch: 'A standardized LiDAR + Sentinel-2 riparian classification workflow built around your Pacific Northwest project types could turn one-time WRIA assessments into annual condition monitoring relationships. The agencies and watershed councils you work with need multi-year data — they just don\'t have the budgets for field-intensive annual visits. RS changes that math and keeps your practice in the conversation year over year.',
-      clients: 'WA/OR/CA fish & wildlife agencies, Army Corps, FERC licensees',
+      pitch: 'California\'s Central Valley rivers are some of the most intensively monitored waterways in the country, yet most of that monitoring is still done with boots on the ground. CDFW, DWR, and your FERC Sierra Nevada relicensing clients all need annual riparian condition data; what they don\'t have is the budget to collect it field-intensively every year. RS-derived riparian classification and change detection gives you that deliverable at a fraction of the cost, with the spatial continuity that biological opinions and multi-year compliance programs are increasingly requiring. Which of your active California salmonid or water rights clients is most over-reliant on field surveys that RS could meaningfully compress?',
+      clients: 'CDFW, DWR, SWRCB, FERC Sierra licensees, CalTrout, Reclamation',
     },
     {
       name: 'Jorgen Blomberg', title: 'Environmental Hydrology & Design Practice Leader',
       category: 'Water', photo: 'https://esassoc.com/wp-content/uploads/2021/10/Jorgen-Blomberg_01.jpg',
       rsFocus: ['Wetland RS Screening', 'TWI / Hydro Terrain Derivatives', 'Floodplain Delineation Support', 'Inundation Mapping'],
-      pitch: 'What if the first deliverable on every large wetland project was an RS probability layer — before your field staff sets foot on site? Hydro terrain and spectral wetland screening lets your team focus field time on ambiguous areas rather than blanketing the whole site. On a 1,000+ acre project that doesn\'t just improve efficiency — it changes your fee structure and makes you more competitive on area-based bids.',
+      pitch: 'What if the first deliverable on every large wetland project was an RS probability layer, deployed before your field staff sets foot on site? Hydro terrain and spectral wetland screening lets your team focus field time on ambiguous areas rather than blanketing the whole site. On a 1,000+ acre project that doesn\'t just improve efficiency; it changes your fee structure and makes you more competitive on area-based bids.',
       clients: 'Army Corps, state DOTs, municipalities, utilities',
     },
     {
       name: 'Meredith Parkin', title: 'Environmental Planning Practice Leader',
       category: 'Planning', photo: 'https://esassoc.com/wp-content/uploads/2019/05/MeredithParkin_square.jpg',
       rsFocus: ['NEPA RS Screening', 'Land Cover Baseline Mapping', 'Cumulative Effects Analysis', 'EIS Spatial Analysis'],
-      pitch: 'NEPA alternatives analysis is almost always constrained by how much spatial baseline data you can produce within budget. RS removes that constraint — a defensible land cover baseline for a 100-square-mile study corridor is now a 2-week deliverable, not a 3-month field campaign. That changes what you can promise in a proposal and how confidently you can commit to NEPA schedule milestones.',
+      pitch: 'NEPA alternatives analysis is almost always constrained by how much spatial baseline data you can produce within budget. RS removes that constraint: a defensible land cover baseline for a 100-square-mile study corridor is now a 2-week deliverable, not a 3-month field campaign. That changes what you can promise in a proposal and how confidently you can commit to NEPA schedule milestones.',
       clients: 'Federal lead agencies, state DOTs, developers',
     },
     {
       name: 'Eryn Brennan', title: 'Community Development Market Leader',
       category: 'Planning', photo: 'https://esassoc.com/wp-content/uploads/2024/03/ErynBrennan_square.jpg',
       rsFocus: ['Urban Tree Canopy', 'Impervious Surface Mapping', 'Urban Heat Island Analysis', 'Green Infrastructure Assessment'],
-      pitch: 'Your municipal clients are increasingly required to document tree canopy, heat islands, and impervious surface for climate resilience plans — and most don\'t have the spatial data to do it. RS-derived urban analysis is something you can offer as a near-turnkey deliverable, opening a recurring data services conversation with every city in your portfolio that currently only calls ESA for planning work.',
+      pitch: 'Your municipal clients are increasingly required to document tree canopy, heat islands, and impervious surface for climate resilience plans, yet most don\'t have the spatial data to do it. RS-derived urban analysis is something you can offer as a near-turnkey deliverable, opening a recurring data services conversation with every city in your portfolio that currently only calls ESA for planning work.',
       clients: 'Municipalities, counties, planning departments',
     },
     {
       name: 'Sharon Niemczyk', title: 'Energy & Industrial Market Leader',
       category: 'Energy', photo: 'https://esassoc.com/wp-content/uploads/2023/05/SharonNiemczyk_square.jpg',
-      rsFocus: ['FERC Relicensing Baselines', 'Transmission Corridor Vegetation', 'Wildfire Risk Mapping', 'Industrial Site Screening'],
-      pitch: 'Your FERC relicensing clients need multi-year habitat monitoring and they need it to be defensible — that\'s exactly where RS creates the most durable value. If you can scope an RS-augmented monitoring program that covers the same habitat at significantly lower field cost and produces consistent annual spatial deliverables, you become the preferred long-term partner rather than a one-cycle vendor. RS is what turns a relicensing study into a 10-year monitoring contract.',
-      clients: 'FERC licensees, electric utilities, oil & gas',
+      rsFocus: ['Solar Facility Siting', 'Transmission Corridor Vegetation', 'Coastal Infrastructure Resilience', 'Industrial Site Screening'],
+      pitch: 'Florida and Southeast utility clients are under increasing pressure around solar facility siting, transmission corridor vegetation management, and infrastructure resilience against coastal risk, and all of it has a spatial data requirement that RS fills directly. Corridor classification and annual change detection can reduce vegetation management costs for FPL and Duke Energy Florida programs that are currently field-intensive by default. That\'s a cost and compliance argument you can make in the next proposal. Which of your active Southeast utility relationships has a right-of-way screening or site monitoring need that hasn\'t been brought to RS yet?',
+      clients: 'FPL, Duke Energy Florida, Southeast utilities, solar developers, coastal municipalities',
     },
     {
       name: 'Eric Beightel', title: 'Federal Strategy Director',
       category: 'Federal', photo: 'https://esassoc.com/wp-content/uploads/2025/01/EricBeightel_square.jpg',
       rsFocus: ['Large-Area Federal Classification', 'IIJA/IRA Program Mapping', '30x30 Monitoring', 'Multi-State RS Programs'],
-      pitch: 'The federal programs you\'re pursuing under IIJA and IRA explicitly require large-area spatial data — habitat conditions, wetland baselines, 30x30 monitoring. Firms that show up with a credible RS methodology win over firms proposing to do it with field crews at those scales. RS is your differentiator in federal RFPs right now, and it\'s specifically the capability the large GIS firms can\'t match with biological depth.',
+      pitch: 'The federal programs you\'re pursuing under IIJA and IRA explicitly require large-area spatial data: habitat conditions, wetland baselines, 30x30 monitoring. Firms that show up with a credible RS methodology win over firms proposing to do it with field crews at those scales. RS is your differentiator in federal RFPs right now, and it\'s specifically the capability the large GIS firms can\'t match with biological depth.',
       clients: 'BLM, USFS, USFWS, NPS, EPA, Army Corps',
     },
     {
       name: 'Mike Arnold', title: 'Airports / Aviation Market Leader',
       category: 'Transportation', photo: 'https://esassoc.com/wp-content/uploads/2021/10/Mike-Arnold_01.jpg',
       rsFocus: ['Site-Scale Vegetation Mapping', 'Wildlife Hazard RS Screening', 'Impervious Surface & Drainage', 'UAS / Drone RS'],
-      pitch: 'Wildlife hazard management plans require spatial vegetation and habitat data that gets repeated every few years — work that\'s currently over-scoped for what the budget typically supports. Drone photogrammetry and high-res classification could cut site survey time significantly while producing more detailed outputs. That makes the work scalable across your airport portfolio and opens a natural conversation about annual monitoring that doesn\'t currently exist.',
+      pitch: 'Wildlife hazard management plans require spatial vegetation and habitat data that gets repeated every few years, work that\'s currently over-scoped for what the budget typically supports. Drone photogrammetry and high-res classification could cut site survey time significantly while producing more detailed outputs. That makes the work scalable across your airport portfolio and opens a natural conversation about annual monitoring that doesn\'t currently exist.',
       clients: 'Airport authorities, FAA, DOT',
     },
     {
       name: 'Patrick Tennant', title: 'Environmental Compliance Director',
       category: 'Planning', photo: 'https://esassoc.com/wp-content/uploads/2025/02/PatrickTennant_square.jpg',
       rsFocus: ['Mitigation Monitoring RS', 'Compliance Mapping', 'Restoration Success Tracking', 'Annual Condition Reporting'],
-      pitch: 'Compliance monitoring is the single most repeatable RS use case — same site, same methods, year after year. Every multi-year mitigation or ITP compliance program in your portfolio is a candidate for an RS-driven monitoring backbone. Clients get consistent, defensible annual data. You get a recurring relationship that doesn\'t have to be re-scoped every cycle. How many of your active permit compliance programs are still being done entirely with field visits?',
+      pitch: 'Compliance monitoring is the single most repeatable RS use case: same site, same methods, year after year. Every multi-year mitigation or ITP compliance program in your portfolio is a candidate for an RS-driven monitoring backbone. Clients get consistent, defensible annual data. You get a recurring relationship that doesn\'t have to be re-scoped every cycle. How many of your active permit compliance programs are still being done entirely with field visits?',
       clients: 'Permit holders, USACE, USFWS, state agencies',
     },
     {
       name: 'Tony Overly', title: 'Cultural Resources Practice Leader',
       category: 'Cultural', photo: 'https://esassoc.com/wp-content/uploads/2021/11/TonyOverly-02.jpg',
       rsFocus: ['LiDAR Archaeological Survey', 'Hillshade / DEM Feature Detection', 'Landscape Context Mapping', 'Tribal Land RS'],
-      pitch: 'LiDAR is already the most transformative RS tool available for cultural resources — but how systematically is it being applied in your Section 106 and tribal consultation projects? For any project area over a few hundred acres, a LiDAR-first screening step surfaces features that intensive pedestrian surveys miss, while cutting the acreage that requires full field attention. That\'s a quality and efficiency argument you can make directly to clients and agencies — and a reason to scope projects differently.',
+      pitch: 'LiDAR is already the most transformative RS tool available for cultural resources, but how systematically is it being applied in your Section 106 and tribal consultation projects? For any project area over a few hundred acres, a LiDAR-first screening step surfaces features that intensive pedestrian surveys miss, while cutting the acreage that requires full field attention. That\'s a quality and efficiency argument you can make directly to clients and agencies and a reason to scope projects differently.',
       clients: 'Tribes, Federal agencies, SHPOs, developers',
     },
     {
       name: 'Mike Leech', title: 'GIS & RS Practice Director',
       category: 'Technology', photo: 'https://esassoc.com/wp-content/uploads/2021/11/Mike-Leech_02.jpg',
       rsFocus: ['Client RS Engagement', 'Internal RS Advocacy', 'Cross-Practice Coordination', 'RS Communication & Messaging', 'RS Product Delivery', '🤷 what does this guy even do?'],
-      pitch: 'Mike is the first call for client-facing RS conversations — translating technical capability into business value. Internally, he champions RS adoption across practices, connects project teams to the right methods, and makes sure people actually know this capability exists.',
+      pitch: 'Mike is the first call for client-facing RS conversations, translating technical capability into business value. Internally, he champions RS adoption across practices, connects project teams to the right methods, and makes sure people actually know this capability exists.',
       clients: 'All ESA practices, BD leads, key external clients',
     },
     {
       name: 'Jim O\'Toole', title: 'ESA Practice Director',
       category: 'Technology', photo: 'https://esassoc.com/wp-content/uploads/2019/05/Jim-OToole_01a.jpg',
       rsFocus: ['RS Practice Standards', 'Quality & Methods Oversight', 'Cross-Practice RS Integration', 'Strategic RS Investment'],
-      pitch: 'The business case for formalizing RS is straightforward — it expands what ESA can competitively scope, makes field-intensive practices more cost-competitive at landscape scale, and creates recurring monitoring revenue that doesn\'t exist today. The question isn\'t whether RS belongs in ESA\'s portfolio; it\'s how fast we move before firms like Stantec and NV5 deepen their ecological credibility and close the differentiation gap.',
+      pitch: 'The business case for formalizing RS is straightforward: it expands what ESA can competitively scope, makes field-intensive practices more cost-competitive at landscape scale, and creates recurring monitoring revenue that doesn\'t exist today. The question isn\'t whether RS belongs in ESA\'s portfolio; it\'s how fast we move before firms like Stantec and NV5 deepen their ecological credibility and close the differentiation gap.',
       clients: 'All ESA practices and markets',
     },
   ];
@@ -3262,28 +3296,28 @@ function BizSection2() {
       name: 'Lauren Abom', title: 'Northern California Regional Director',
       region: 'Northern California', photo: 'https://esassoc.com/wp-content/uploads/2023/02/LaurenAbom_square.jpg',
       rsFocus: ['NorCal Habitat Classification', 'Delta & Wetland RS', 'CEQA Baseline Mapping', 'Vernal Pool & Grassland Monitoring'],
-      pitch: 'Your region has more active CEQA, Section 404, and water project work than almost anywhere else in ESA\'s portfolio — which means more projects that are field-heavy by default. RS gives your teams a way to handle larger study areas without proportionally larger budgets. The conversation to start: which NorCal clients in your active pipeline have projects scoped with blanket field surveys that RS screening could meaningfully compress?',
+      pitch: 'Your region has more active CEQA, Section 404, and water project work than almost anywhere else in ESA\'s portfolio, meaning more projects that are field-heavy by default. RS gives your teams a way to handle larger study areas without proportionally larger budgets. The conversation to start: which NorCal clients in your active pipeline have projects scoped with blanket field surveys that RS screening could meaningfully compress?',
       clients: 'State water agencies, Army Corps, Bay Area municipalities, ag landowners',
     },
     {
       name: 'Ruta Thomas', title: 'Southern California Regional Director',
       region: 'Southern California', photo: 'https://esassoc.com/wp-content/uploads/2021/10/Ruta_58RT2print_sq-1.jpg',
       rsFocus: ['HCP/NCCP Habitat Mapping', 'Coastal & Sage Scrub Classification', 'Urban Growth Screening', 'Wildfire Risk & Recovery'],
-      pitch: 'Your HCP and NCCP compliance clients need consistent, annual spatial data — and many of them are currently getting it through field methods that are more expensive than they need to be. If even a portion of your active SoCal permit monitoring work adopted an RS layer, it would represent significant recurring revenue with minimal re-scoping. The pitch to clients is defensibility and consistency. The pitch to you is pipeline stability and deeper client retention.',
+      pitch: 'Your HCP and NCCP compliance clients need consistent, annual spatial data, yet many of them are currently getting it through field methods that are more expensive than they need to be. If even a portion of your active SoCal permit monitoring work adopted an RS layer, it would represent significant recurring revenue with minimal re-scoping. The pitch to clients is defensibility and consistency. The pitch to you is pipeline stability and deeper client retention.',
       clients: 'USFWS, local JPA/HCP entities, coastal cities, utilities, developers',
     },
     {
       name: 'Stacy Bumback', title: 'Pacific Northwest Regional Director',
       region: 'Pacific Northwest', photo: 'https://esassoc.com/wp-content/uploads/2022/03/StacyBumback_square.jpg',
       rsFocus: ['Riparian & Salmon Habitat RS', 'WRIA Watershed Mapping', 'PNW Forest Classification', 'Wetland Delineation Support'],
-      pitch: 'Salmon recovery and WRIA work is where RS can turn a one-time assessment into an annual monitoring program — and your region has more of that project type than anywhere else in ESA. The agencies and watershed councils you work with need multi-year riparian condition data; what they don\'t have is the budget for annual field-intensive visits. RS changes that equation. Which of your active WRIA or FERC clients has a monitoring obligation they\'re underserving because of cost?',
+      pitch: 'Salmon recovery and WRIA work is where RS can turn a one-time assessment into an annual monitoring program, and your region has more of that project type than anywhere else in ESA. The agencies and watershed councils you work with need multi-year riparian condition data; what they don\'t have is the budget for annual field-intensive visits. RS changes that equation. Which of your active WRIA or FERC clients has a monitoring obligation they\'re underserving because of cost?',
       clients: 'WA/OR fish & wildlife agencies, FERC licensees, tribes, Army Corps Seattle',
     },
     {
       name: 'Douglas Skurski', title: 'Southeast Regional Director',
       region: 'Southeast', photo: 'https://esassoc.com/wp-content/uploads/2021/10/Douglas-Skurski.jpg',
       rsFocus: ['Southeast Wetland Mapping', 'Longleaf Pine & Flatwoods RS', 'Coastal Resilience Mapping', 'IIJA Infrastructure Screening'],
-      pitch: 'The Southeast is largely untapped for ESA RS work — which is the opportunity. There are no entrenched RS competitors in your key markets the way there are in California and the Pacific Northwest. Longleaf restoration programs, coastal resilience planning, and IIJA infrastructure projects all need spatial data frameworks that your clients may not yet associate with ESA. Introducing RS into even one or two of your strongest Southeast relationships establishes ESA as the go-to provider before others do.',
+      pitch: 'The Southeast is largely untapped for ESA RS work, and that is the opportunity. There are no entrenched RS competitors in your key markets the way there are in California and the Pacific Northwest. Longleaf restoration programs, coastal resilience planning, and IIJA infrastructure projects all need spatial data frameworks that your clients may not yet associate with ESA. Introducing RS into even one or two of your strongest Southeast relationships establishes ESA as the go-to provider before others do.',
       clients: 'USACE Mobile/Savannah Districts, state DOTs, coastal municipalities, federal agencies',
     },
   ];
@@ -3303,7 +3337,7 @@ function BizSection2() {
   return (
     <section id="biz-2" style={{ marginBottom: 56 }}>
       <h2 style={{ fontSize: 24, fontWeight: 700, color: '#004562', marginBottom: 4 }}>2. RS Outreach Directory</h2>
-      <p style={{ color: '#64748b', marginBottom: 16, fontSize: 15 }}>ESA practice, market, and regional leaders — with the RS products and talking points most relevant to each.</p>
+      <p style={{ color: '#64748b', marginBottom: 16, fontSize: 15 }}>ESA practice, market, and regional leaders, with the RS products and talking points most relevant to each.</p>
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
         {filters.map(f => (
           <button key={f} onClick={() => setFilter(f)} style={{
@@ -3355,7 +3389,7 @@ function BizSection2() {
 function BizSection3() {
   const [openQ, setOpenQ] = React.useState(null);
   const differentiators = [
-    { icon: '🔬', title: 'Ecological Depth + RS Breadth', body: 'ESA combines deep biological and regulatory expertise with RS technical capability — rare in the market. Classifiers are validated against field-verified ground truth from ESA\'s own ecological staff, not outsourced.' },
+    { icon: '🔬', title: 'Ecological Depth + RS Breadth', body: 'ESA combines deep biological and regulatory expertise with RS technical capability, a rare combination in the market. Classifiers are validated against field-verified ground truth from ESA\'s own ecological staff, not outsourced.' },
     { icon: '⚖️', title: 'Regulatory Fluency', body: 'RS deliverables are designed for regulatory contexts from the start: ESA Section 7, Section 404, NEPA, CEQA, HCP/NCCP. Maps are formatted to support permit applications, not just technical reporting.' },
     { icon: '🔄', title: 'Reproducible, Defensible Methods', body: 'Fully documented RF workflows with versioned models, training sample provenance, and accuracy statistics that hold up under agency review. Not black-box outputs.' },
     { icon: '🗺️', title: 'Multi-Scale Capability', body: 'From site-scale NAIP analysis (0.3m) to landscape-scale Sentinel-2 time series (10m, 400km swath). Can match sensor selection to project scope and budget.' },
@@ -3363,27 +3397,27 @@ function BizSection3() {
   ];
   const growthQs = [
     {
-      q: 'Which of your highest-trust client relationships are currently funding large-scale, repeat field surveys — and have never been shown what RS could do for them?',
+      q: 'Which of your highest-trust client relationships are currently funding large-scale, repeat field surveys but have never been shown what RS could do for them?',
       why: 'Existing trust is the hardest part. Clients already comfortable with ESA\'s judgment are the lowest-friction entry point for introducing RS as a scope expansion, not a disruption.',
     },
     {
-      q: 'Where have you lost competitive bids on price — and could RS have compressed the field hours enough to win?',
+      q: 'Where have you lost competitive bids on price, and could RS have compressed the field hours enough to win?',
       why: 'RS-augmented scopes routinely reduce field effort by 30–50% on landscape-scale projects. That margin recovery is a concrete, financial reason to bring it into the next proposal.',
     },
     {
-      q: 'Which clients have monitoring obligations tied to permits, agreements, or consent decrees — where a multi-year RS framework would deepen the relationship rather than close it?',
-      why: 'Permit-driven monitoring programs create recurring revenue. RS is the mechanism that makes annual monitoring economically viable for clients at scale — and defensible to the approving agency.',
+      q: 'Which clients have monitoring obligations tied to permits, agreements, or consent decrees, where a multi-year RS framework would deepen the relationship rather than close it?',
+      why: 'Permit-driven monitoring programs create recurring revenue. RS is the mechanism that makes annual monitoring economically viable for clients at scale and defensible to the approving agency.',
     },
     {
-      q: 'Are there clients who have asked about climate resilience, landscape change, or large-area data — but haven\'t been shown what a modern RS deliverable actually looks like from ESA?',
+      q: 'Are there clients who have asked about climate resilience, landscape change, or large-area data but haven\'t been shown what a modern RS deliverable actually looks like from ESA?',
       why: 'Leadership conversations about climate and landscape change often stall because clients can\'t picture the output. A concrete RS example from an analogous ESA project frequently closes that gap.',
     },
     {
-      q: 'Where is ESA currently delivering strong science but constrained by field budget — leaving spatial coverage or reporting scale smaller than the client\'s actual need?',
+      q: 'Where is ESA currently delivering strong science but constrained by field budget, leaving spatial coverage or reporting scale smaller than the client\'s actual need?',
       why: 'These projects already have client buy-in on the work. RS expands what the same budget can cover spatially, which often surfaces as a scope expansion opportunity on renewal or the next phase.',
     },
     {
-      q: 'Which project types are being replicated across your portfolio in similar geographies — where a single well-built RS framework could be leveraged across multiple contracts?',
+      q: 'Which project types are being replicated across your portfolio in similar geographies where a single well-built RS framework could be leveraged across multiple contracts?',
       why: 'Commodity projects (annual monitoring, habitat screening, baseline mapping) are where RS creates the most internal efficiency. One reusable model across five similar sites is a business case in itself.',
     },
   ];
@@ -3391,32 +3425,32 @@ function BizSection3() {
   const objections = [
     {
       q: '"Wouldn\'t our field biologists collect better, more accurate data?"',
-      a: 'Field biologists collect the highest-quality data — at points. RS delivers spatially continuous coverage that no field crew can match at landscape scale. The strongest work combines both: RS defines the spatial extent and prioritizes where field effort is highest-value, rather than spreading ecologists thin across hundreds of acres of accessible but uninformative terrain. RS is a force multiplier for field staff, not a replacement.',
+      a: 'Field biologists collect the highest-quality data, but only at points. RS delivers spatially continuous coverage that no field crew can match at landscape scale. The strongest work combines both: RS defines the spatial extent and prioritizes where field effort is highest-value, rather than spreading ecologists thin across hundreds of acres of accessible but uninformative terrain. RS is a force multiplier for field staff, not a replacement.',
       tag: 'Discipline',
     },
     {
       q: '"Doesn\'t this cannibalize our core biology work?"',
-      a: 'The opposite is more often true. RS tends to expand the scope of work rather than substitute for it — a client who couldn\'t justify a $200K field survey for 5,000 acres will often fund an RS-augmented scope that delivers comparable coverage at lower cost, with field verification built in. ESA\'s biology services become more competitive, not less relevant, when they can be offered at landscape scale.',
+      a: 'The opposite is more often true. RS tends to expand the scope of work rather than substitute for it; a client who couldn\'t justify a $200K field survey for 5,000 acres will often fund an RS-augmented scope that delivers comparable coverage at lower cost, with field verification built in. ESA\'s biology services become more competitive, not less relevant, when they can be offered at landscape scale.',
       tag: 'Strategic',
     },
     {
-      q: '"The client already has GIS staff — they\'ll think we\'re just doing something they can do themselves."',
-      a: 'GIS and RS are fundamentally different capabilities. GIS manages and visualizes spatial data. RS produces it — through machine learning classification, multi-temporal image compositing, and statistical accuracy assessment that few client GIS teams are staffed or tooled to do. The deliverable ESA produces would take most client GIS departments 3–6 months to replicate, if at all.',
+      q: '"The client already has GIS staff , and they\'ll think we\'re just doing something they can do themselves."',
+      a: 'GIS and RS are fundamentally different capabilities. GIS manages and visualizes spatial data. RS produces it through machine learning classification, multi-temporal image compositing, and statistical accuracy assessment that few client GIS teams are staffed or tooled to do. The deliverable ESA produces would take most client GIS departments 3–6 months to replicate, if at all.',
       tag: 'Positioning',
     },
     {
       q: '"What if the RS output is wrong? Who owns the liability?"',
-      a: 'ESA\'s RS deliverables include full accuracy documentation — confusion matrices, overall accuracy, per-class producer\'s and user\'s accuracy — submitted alongside the map. This is the same evidentiary standard used in published peer-reviewed literature and increasingly required by federal agencies. The documented accuracy threshold is part of the contract scope, not an afterthought. Vague field assessments often carry more unquantified uncertainty.',
+      a: 'ESA\'s RS deliverables include full accuracy documentation: confusion matrices, overall accuracy, per-class producer\'s and user\'s accuracy, submitted alongside the map. This is the same evidentiary standard used in published peer-reviewed literature and increasingly required by federal agencies. The documented accuracy threshold is part of the contract scope, not an afterthought. Vague field assessments often carry more unquantified uncertainty.',
       tag: 'Risk',
     },
     {
-      q: '"We already have strong relationships with this client — I don\'t want to change the dynamic by pitching something new."',
-      a: 'Introducing RS doesn\'t require re-scoping an existing project. The most effective path is a brief, no-pressure conversation during a check-in: "We\'ve been doing some landscape-scale work for similar clients using satellite imagery and RF classification — would it be useful to show you what that looks like for your monitoring program?" That framing positions it as an added capability, not a sales pitch.',
+      q: '"We already have strong relationships with this client ; I don\'t want to change the dynamic by pitching something new."',
+      a: 'Introducing RS doesn\'t require re-scoping an existing project. The most effective path is a brief, no-pressure conversation during a check-in: "We\'ve been doing some landscape-scale work for similar clients using satellite imagery and RF classification; would it be useful to show you what that looks like for your monitoring program?" That framing positions it as an added capability, not a sales pitch.',
       tag: 'Relationship',
     },
     {
       q: '"Is there actually a market for this, or is this an internal experiment?"',
-      a: 'The geospatial services market is projected to exceed $14B by 2028, with RS-specific services among the fastest-growing segments. Federal programs under IIJA and IRA alone are generating demand for landscape-scale habitat and wetland mapping that ESA is uniquely positioned to win — combining RS capability with the biological expertise that pure-play geospatial firms can\'t match. This is a market pull, not a technology push.',
+      a: 'The geospatial services market is projected to exceed $14B by 2028, with RS-specific services among the fastest-growing segments. Federal programs under IIJA and IRA alone are generating demand for landscape-scale habitat and wetland mapping that ESA is uniquely positioned to win, combining RS capability with the biological expertise that pure-play geospatial firms can\'t match. This is a market pull, not a technology push.',
       tag: 'Market',
     },
   ];
@@ -3426,10 +3460,10 @@ function BizSection3() {
   return (
     <section id="biz-3" style={{ marginBottom: 56 }}>
       <h2 style={{ fontSize: 24, fontWeight: 700, color: '#004562', marginBottom: 4 }}>3. Strategic Client Conversations</h2>
-      <p style={{ color: '#64748b', marginBottom: 24, fontSize: 15 }}>Questions to identify RS growth potential in existing client relationships — and responses to the pushback you'll actually hear at a leadership level.</p>
+      <p style={{ color: '#64748b', marginBottom: 24, fontSize: 15 }}>Questions to identify RS growth potential in existing client relationships, along with responses to the pushback you'll actually hear at a leadership level.</p>
 
       <h3 style={{ fontSize: 17, fontWeight: 700, color: '#1e293b', marginBottom: 6 }}>ESA RS Differentiators</h3>
-      <p style={{ fontSize: 13, color: '#64748b', marginBottom: 14 }}>What makes ESA's RS capability distinct in the market — for use in positioning conversations.</p>
+      <p style={{ fontSize: 13, color: '#64748b', marginBottom: 14 }}>What makes ESA's RS capability distinct in the market, for use in positioning conversations.</p>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 12, marginBottom: 36 }}>
         {differentiators.map((d, i) => (
           <div key={i} style={{ background: '#fff', borderRadius: 10, padding: '16px 18px', border: '1px solid #e2e8f0' }}>
@@ -3445,7 +3479,7 @@ function BizSection3() {
       </div>
 
       <h3 style={{ fontSize: 17, fontWeight: 700, color: '#1e293b', marginBottom: 6 }}>Client Growth Diagnostics</h3>
-      <p style={{ fontSize: 13, color: '#64748b', marginBottom: 14 }}>Questions to ask yourself — or your team — to identify which existing client relationships have the most realistic near-term RS potential.</p>
+      <p style={{ fontSize: 13, color: '#64748b', marginBottom: 14 }}>Questions to ask yourself (or your team) to identify which existing client relationships have the most realistic near-term RS potential.</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 36 }}>
         {growthQs.map((item, i) => (
           <div key={i} style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
@@ -3468,7 +3502,7 @@ function BizSection3() {
       </div>
 
       <h3 style={{ fontSize: 17, fontWeight: 700, color: '#1e293b', marginBottom: 6 }}>Objections & Strategic Responses</h3>
-      <p style={{ fontSize: 13, color: '#64748b', marginBottom: 14 }}>The pushback that actually comes up at a leadership or client level — and how to respond.</p>
+      <p style={{ fontSize: 13, color: '#64748b', marginBottom: 14 }}>The pushback that actually comes up at a leadership or client level, with responses.</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {objections.map((o, i) => {
           const idx = i + 100;
@@ -3503,14 +3537,14 @@ function BizSection4() {
     {
       horizon: 'Near-Term', color: '#2d6a4f',
       title: 'Augment Active Monitoring Programs',
-      body: 'ESA already holds multi-year monitoring contracts with FERC licensees, HCP/NCCP entities, and federal land managers. Introducing RS into the next monitoring cycle — rather than a new proposal — is the lowest-friction path to first revenue. These clients already trust ESA\'s judgment and have established budgets.',
+      body: 'ESA already holds multi-year monitoring contracts with FERC licensees, HCP/NCCP entities, and federal land managers. Introducing RS into the next monitoring cycle (rather than a new proposal) is the lowest-friction path to first revenue. These clients already trust ESA\'s judgment and have established budgets.',
       signals: ['Client mentions "we need to cover more area"', 'Annual reporting scope is the same every year', 'Field costs are the primary budget constraint'],
       markets: ['FERC Licensees', 'HCP/NCCP', 'Federal Land Mgmt'],
     },
     {
       horizon: 'Near-Term', color: '#2d6a4f',
       title: 'Compete on Price with RS-Augmented Scopes',
-      body: 'On landscape-scale proposals where ESA is price-competitive but not winning, an RS layer that reduces field hours by 30–50% often flips the math. This doesn\'t require a new service line conversation — it\'s a scoping decision that makes the next proposal more competitive without sacrificing margin.',
+      body: 'On landscape-scale proposals where ESA is price-competitive but not winning, an RS layer that reduces field hours by 30–50% often flips the math. This doesn\'t require a new service line conversation; it\'s a scoping decision that makes the next proposal more competitive without sacrificing margin.',
       signals: ['Lost bid feedback cites cost', 'Project area > 500 acres', 'Repeated losses to NV5, Woolpert, or large GIS firms'],
       markets: ['State DOTs', 'Infrastructure Developers', 'Utilities'],
     },
@@ -3531,14 +3565,14 @@ function BizSection4() {
     {
       horizon: 'Strategic', color: '#7c3aed',
       title: 'Build Repeatable RS Frameworks by Project Type',
-      body: 'ESA\'s highest RS leverage comes from standardizing methods across project types — one well-validated wetland screening model reused across 10 projects in the same ecoregion generates far more return than 10 bespoke analyses. Identifying 2–3 project types where ESA has the densest portfolio and building a reusable RS framework is the foundational strategic investment.',
+      body: 'ESA\'s highest RS leverage comes from standardizing methods across project types; one well-validated wetland screening model reused across 10 projects in the same ecoregion generates far more return than 10 bespoke analyses. Identifying 2–3 project types where ESA has the densest portfolio and building a reusable RS framework is the foundational strategic investment.',
       signals: ['Same project type appears in multiple regions', 'Clients ask about cost reduction on repeat scopes', 'Staff spend significant hours rebuilding similar workflows'],
       markets: ['All markets where ESA has repeat work'],
     },
     {
       horizon: 'Strategic', color: '#7c3aed',
       title: 'Differentiate in Coastal Resilience & Climate Adaptation',
-      body: 'Climate resilience planning is a fast-growing market segment where spatial data is central to every deliverable — shoreline change, inundation risk, habitat vulnerability, restoration site prioritization. ESA\'s coastal ecology expertise combined with RS creates a differentiated offering that pure-play geospatial firms cannot match without the biological and regulatory depth.',
+      body: 'Climate resilience planning is a fast-growing market segment where spatial data is central to every deliverable: shoreline change, inundation risk, habitat vulnerability, restoration site prioritization. ESA\'s coastal ecology expertise combined with RS creates a differentiated offering that pure-play geospatial firms cannot match without the biological and regulatory depth.',
       signals: ['Client is planning for sea level rise or flood resilience', 'State or federal resilience grant is involved', 'Deliverable requires habitat or ecosystem valuation'],
       markets: ['Coastal Municipalities', 'State Coastal Agencies', 'Conservation Organizations'],
     },
@@ -3550,7 +3584,7 @@ function BizSection4() {
   return (
     <section id="biz-4" style={{ marginBottom: 56 }}>
       <h2 style={{ fontSize: 24, fontWeight: 700, color: '#004562', marginBottom: 4 }}>4. RS Growth Opportunities</h2>
-      <p style={{ color: '#64748b', marginBottom: 28, fontSize: 15 }}>Where ESA has the most credible near- and mid-term potential to grow RS revenue — organized by time horizon and strategic fit.</p>
+      <p style={{ color: '#64748b', marginBottom: 28, fontSize: 15 }}>Where ESA has the most credible near- and mid-term potential to grow RS revenue, organized by time horizon and strategic fit.</p>
 
       {horizonOrder.map(horizon => {
         const group = opportunities.filter(o => o.horizon === horizon);
@@ -3619,7 +3653,7 @@ function BizSection5() {
     },
     wria1: {
       title: 'WRIA 1 Riparian Characterization',
-      subtitle: 'Watershed Resource Inventory Area 1 — Nooksack Basin',
+      subtitle: 'Watershed Resource Inventory Area 1, Nooksack Basin',
       region: 'Northwest Washington State', year: '2023–2024', client: 'Whatcom County / WRIA 1 Planning Unit',
       tag: 'Riparian, Change Detection, Salmon Recovery',
       summary: 'As part of the WRIA 1 watershed plan update under Washington\'s Salmon Recovery Act, ESA conducted a basin-wide riparian characterization to identify current conditions, disturbance patterns, and priority restoration reaches across the Nooksack River system. The study area spans approximately 120 miles of mainstem and tributary channels through a highly heterogeneous agricultural, forested, and suburban landscape.',
@@ -3699,7 +3733,7 @@ function MktSection0() {
         <div style={{ fontSize: 13, fontWeight: 600, color: '#66CAD8', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 8 }}>Module Overview</div>
         <h1 style={{ fontSize: 30, fontWeight: 700, margin: '0 0 12px' }}>Market & Competitive Intelligence</h1>
         <p style={{ fontSize: 16, color: 'rgba(255,255,255,0.85)', maxWidth: 720, lineHeight: 1.7, margin: '0 0 8px' }}>
-          Situational awareness for ESA leadership and business development staff on the RS and geospatial services market — who the competitors are, where growth is happening, and where ESA has a differentiated competitive position.
+          Situational awareness for ESA leadership and business development staff on the RS and geospatial services market: who the competitors are, where growth is happening, and where ESA has a differentiated competitive position.
         </p>
         <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', margin: 0 }}>Content reflects publicly available market data and ESA staff knowledge as of early 2025. Market figures are directional estimates; cite primary sources before using externally.</p>
         <div style={{ display: 'flex', gap: 24, marginTop: 24, flexWrap: 'wrap' }}>
@@ -3847,7 +3881,7 @@ function MktSection2() {
         {/* axis labels */}
         <text x={pad.l + pw / 2} y={H - 2} textAnchor="middle" fontSize={10} fill="#64748b">Total Firm Revenue (log scale)</text>
         <text x={10} y={pad.t + ph / 2} textAnchor="middle" fontSize={10} fill="#64748b" transform={`rotate(-90, 10, ${pad.t + ph / 2})`}>Est. RS Revenue ($M)</text>
-        {/* bubbles — draw ESA last so it's on top */}
+        {/* bubbles: draw ESA last so it's on top */}
         {[...scaleData].sort((a, b) => b.personnel - a.personnel).map((d, i) => {
           const cx = xs(d.revTotal), cy = ys(d.revRS), r = rs(d.personnel);
           const isHov = hovered === d.abbr;
@@ -3875,7 +3909,7 @@ function MktSection2() {
             </g>
           );
         })}
-        {/* bubble size legend — upper-left, where chart is clear */}
+        {/* bubble size legend, upper-left, where chart is clear */}
         <text x={pad.l + 10} y={pad.t + 12} fontSize={9} fill="#94a3b8" fontWeight={600}>bubble = personnel</text>
         {[[0.6,'~600'], [3.5,'~3.5K'], [30,'~30K']].map(([p, label], i) => {
           const lx = pad.l + 18 + i * 68, ly = pad.t + 38, lr = rs(p);
@@ -3929,7 +3963,7 @@ function MktSection2() {
       { name: 'WSP',              min: 0, max: 4, note: 'Multi-disciplinary, infrastructure',    color: '#475569' },
       { name: 'Tetra Tech',       min: 1, max: 5, note: 'Federal, project to national scale',    color: '#1193BA' },
       { name: 'AECOM',            min: 1, max: 5, note: 'DOD, large federal infrastructure',     color: '#b0b8c1' },
-      { name: 'NV5 Geospatial',   min: 1, max: 5, note: 'Aerial, LiDAR, satellite — project to national', color: '#F9A134' },
+      { name: 'NV5 Geospatial',   min: 1, max: 5, note: 'Aerial, LiDAR, satellite, project to national', color: '#F9A134' },
       null,
       { name: 'Maxar',            min: 1, max: 5, note: 'Sub-ft commercial imagery provider',    color: '#00A79D', isProvider: true },
       { name: 'Planet Labs',      min: 2, max: 5, note: 'Daily 3m global constellation',         color: '#00A79D', isProvider: true },
@@ -4011,7 +4045,7 @@ function MktSection2() {
         <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 20, alignItems: 'center', marginTop: 12 }}>
           <BubbleChart />
           <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>RS Focus — Est. % of Firm Revenue</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>RS Focus: Est. % of Firm Revenue</div>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={focusData} layout="vertical" margin={{ top: 0, right: 40, bottom: 0, left: 36 }}>
                 <XAxis type="number" domain={[0, 55]} tick={{ fontSize: 10 }} tickFormatter={v => v + '%'} />
@@ -4036,7 +4070,7 @@ function MktSection2() {
       <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', padding: '20px 24px', marginBottom: 28 }}>
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontWeight: 700, color: '#1e293b', fontSize: 15 }}>RS Project Scale Range by Firm</div>
-          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>Bars show each firm's typical operating scale — from drone site work to national satellite collections. Hover any bar for detail.</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>Bars show each firm's typical operating scale, from drone site work to national satellite collections. Hover any bar for detail.</div>
         </div>
         <ProjectScaleChart />
       </div>
@@ -4098,7 +4132,7 @@ function MktSection3() {
       impact: 'Baseline multispectral imagery is no longer a cost barrier. Differentiation now lies in processing sophistication and biological interpretation.' },
     { phase: 'Growing', label: 'SAR (Synthetic Aperture Radar) Integration', icon: '📡',
       body: 'Sentinel-1 (free, C-band SAR) and upcoming NISAR (NASA/ISRO, 2025) provide cloud-penetrating imagery critical for Pacific Northwest and tropical environments. SAR coherence and backscatter are increasingly used for wetland inundation, forest disturbance, and soil moisture mapping.',
-      impact: 'Unlocks year-round monitoring in cloudy regions. Complexity of SAR analysis limits adoption — a barrier to entry for smaller competitors.' },
+      impact: 'Unlocks year-round monitoring in cloudy regions. Complexity of SAR analysis limits adoption, a barrier to entry for smaller competitors.' },
     { phase: 'Growing', label: 'AI-Assisted Classification & Segmentation', icon: '🤖',
       body: 'Deep learning (U-Net, vision transformers) applied to RS imagery is showing improvements over RF for some tasks (impervious surface, building footprints). However, RF remains superior for multi-sensor, small-sample ecological classification with interpretability requirements.',
       impact: 'Clients will increasingly ask about AI approaches. ESA needs a clear, defensible position on when RF is preferred over DL and why.' },
@@ -4110,7 +4144,7 @@ function MktSection3() {
       impact: 'Enables centimeter-scale RS for site-specific work. Requires FAA Part 107 certification and data pipeline investment. Growing client expectation.' },
     { phase: 'Emerging', label: 'LiDAR Commoditization', icon: '📐',
       body: 'USGS 3DEP is completing national LiDAR coverage by ~2027. State programs (WA DNR, CA, OR) are providing free QL2 LiDAR for large portions of ESA\'s core geographies. Drone LiDAR (Riegl, Hesai) is cost-competitive for site-scale acquisition.',
-      impact: 'LiDAR-derived CHM, TWI, and terrain features will be freely available for nearly all US project areas within 3–5 years — removing a major data gap.' },
+      impact: 'LiDAR-derived CHM, TWI, and terrain features will be freely available for nearly all US project areas within 3–5 years, removing a major data gap.' },
     { phase: 'Emerging', label: 'Hyperspectral from Space', icon: '🌈',
       body: 'NASA EMIT (ISS-based) and PRISMA (ASI) provide hyperspectral imagery (hundreds of narrow bands) covering wide areas. PACE satellite (2024) adds ocean color. Upcoming SBG mission targets terrestrial hyperspectral.',
       impact: 'Enables species-level vegetation discrimination previously limited to airborne sensors. Will expand the range of RS applications for ecological consulting within 5 years.' },
@@ -4120,12 +4154,12 @@ function MktSection3() {
   return (
     <section id="mkt-3" style={{ marginBottom: 56 }}>
       <h2 style={{ fontSize: 24, fontWeight: 700, color: '#004562', marginBottom: 4 }}>3. Technology Trends</h2>
-      <p style={{ color: '#64748b', marginBottom: 16, fontSize: 15 }}>Key RS and geospatial technology shifts — maturity stage, business impact, and relevance to ESA's service positioning.</p>
+      <p style={{ color: '#64748b', marginBottom: 16, fontSize: 15 }}>Key RS and geospatial technology shifts: maturity stage, business impact, and relevance to ESA's service positioning.</p>
       <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
         {['Mature','Growing','Emerging'].map(p => (
           <span key={p} style={{ background: phaseColor[p] + '20', color: phaseColor[p], borderRadius: 12, padding: '4px 12px', fontSize: 12, fontWeight: 700 }}>{p}</span>
         ))}
-        <span style={{ fontSize: 13, color: '#94a3b8', alignSelf: 'center', marginLeft: 4 }}>— adoption maturity stages</span>
+        <span style={{ fontSize: 13, color: '#94a3b8', alignSelf: 'center', marginLeft: 4 }}>(adoption maturity stages)</span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {trends.map((t, i) => (
@@ -4156,8 +4190,8 @@ function MktSection4() {
     S: {
       label: 'Strengths', color: '#00A79D', bg: '#f0fdf4',
       items: [
-        'Deep biological and regulatory expertise paired with RS technical capability — rare combination in the market',
-        'Multi-regulatory fluency: ESA Section 7, Section 404, NEPA, CEQA, HCP/NCCP — RS deliverables designed for compliance from the start',
+        'Deep biological and regulatory expertise paired with RS technical capability, a rare combination in the market',
+        'Multi-regulatory fluency: ESA Section 7, Section 404, NEPA, CEQA, HCP/NCCP; RS deliverables designed for compliance from the start',
         'ESA project portfolio (FERC, WRIA, salmon recovery, coastal) generates proprietary training data and validated methods',
         'NearMap license provides sub-foot aerial imagery advantage for urban/riparian work',
         'Long-standing federal agency relationships (USFWS, NPS, Army Corps, FERC) provide repeat business and trust',
@@ -4167,9 +4201,9 @@ function MktSection4() {
     W: {
       label: 'Weaknesses', color: '#ef4444', bg: '#fef2f2',
       items: [
-        'Small dedicated RS team — limited capacity to pursue multiple large concurrent RS-intensive contracts',
+        'Small dedicated RS team with limited capacity to pursue multiple large concurrent RS-intensive contracts',
         'Limited cloud-native RS platform investment (GEE/MSPC) relative to pure-play geospatial firms',
-        'RS capability visibility is low in ESA\'s external marketing — not prominently featured in proposal boilerplate',
+        'RS capability visibility is low in ESA\'s external marketing, not prominently featured in proposal boilerplate',
         'Hyperspectral and SAR capability currently limited; growing client interest not yet met',
         'Training sample and model repository not yet systematized',
       ],
@@ -4177,7 +4211,7 @@ function MktSection4() {
     O: {
       label: 'Opportunities', color: '#1193BA', bg: '#f0f9ff',
       items: [
-        'IIJA-driven wetland and habitat baseline demand across all five ESA practice states — RS reduces cost vs. field-only approaches',
+        'IIJA-driven wetland and habitat baseline demand across all five ESA practice states; RS reduces cost vs. field-only approaches',
         'Tribal nation partnerships: RS supports ancestral land monitoring with cultural sensitivity and spatial coverage',
         '30x30 conservation monitoring: federal and state programs need annual, large-area RS-based condition assessments',
         'Algal bloom and water quality monitoring: growing state regulatory requirements, ESA has unique biology + RS combination',
@@ -4189,8 +4223,8 @@ function MktSection4() {
       label: 'Threats', color: '#F9A134', bg: '#fffbeb',
       items: [
         'Large GIS firms (NV5, Woolpert) commoditizing RS analysis and competing on price for federal mapping contracts',
-        'AI tools enabling clients to run their own basic RS workflows — reducing entry-level RS service demand',
-        'Consultant market consolidation — Stantec, WSP, Tetra Tech acquiring boutique ecological firms and adding RS in-house',
+        'AI tools enabling clients to run their own basic RS workflows, reducing entry-level RS service demand',
+        'Consultant market consolidation: Stantec, WSP, Tetra Tech acquiring boutique ecological firms and adding RS in-house',
         'NLCD and other national datasets improving, reducing the "ESA maps it better" argument for lower-complexity projects',
         'Federal budget uncertainty affecting agency contract pipelines (continuing resolutions, procurement freezes)',
       ],
@@ -4348,7 +4382,7 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Scroll spy — re-runs when currentModule changes so observer attaches to new section IDs
+  // Scroll spy: re-runs when currentModule changes so observer attaches to new section IDs
   React.useEffect(() => {
     const ids = MODULE_SECTIONS[currentModule].map(s => s.id);
     const observer = new IntersectionObserver((entries) => {
@@ -4371,16 +4405,16 @@ function App() {
       {/* Header */}
       <header style={{
         position: 'sticky', top: 0, zIndex: 40, background: '#004562',
-        padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '13px 48px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 22 }}>
           <span style={{ display: 'inline-block', height: 40 }} dangerouslySetInnerHTML={{ __html: '<svg height="40" viewBox="0 0 432 257" width="67" xmlns="http://www.w3.org/2000/svg"><g fill="none"><path d="m114.6 2.44h-114.6v114.56c5.90988984-60.6685706 53.92937-108.67128998 114.6-114.56z" fill="#aeafb2"/><path d="m139.21 256.23h114.59v-114.58c-5.900103 60.672983-53.916502 108.685192-114.59 114.58z" fill="#aeafb2"/><path d="m164.3 107h12.34v-101.82h-12.34v-2.74h89.5v30.33h-2.8v-2.12c0-13.88-10.21-25.47-28.35-25.47h-22.22v46.66h10.57c9.9 0 15.09-5.64 15.09-20.13v-1.71h2.74v48.21h-2.74v-3.51c0-10.83-5.19-20.12-15.09-20.12h-10.57v52.42h22c25 0 28.65-20.74 28.65-29.44v-2.1h2.76v34.32h-89.54zm100.31-37.63h2.74c3.66 17.23 15.24 40.09 35.82 40.09 13.12 0 21.95-8.07 21.95-21.49 0-33.24-60.82-9.29-60.82-55.2 0-20.13 13.41-32.77 33.53-32.77 15.41 0 20.29 8.22 27.17 8.22 4.58 0 4.89-4 4.89-5.93h2.75v34.3h-2.75c-3.81-16.17-12.35-33.85-31.57-33.85-11.6 0-20.32 7.78-20.32 19.52 0 29.43 61.76 6.25 61.76 51.53 0 23.78-13.42 38.42-34.92 38.42-13.26 0-25.76-7.92-31.86-7.92-4.12 0-5.64 2.74-5.64 5.64h-2.74zm69.05 37.63h2c5.79-.45 8.55-4.12 10.38-9.16l35.34-97.84h2.3l40.86 107h7.46v2.75h-45.43v-2.75h12.18l-11.11-31.69h-29.58l-7.32 21.5c-.623698 1.4517093-.985935 3.0022191-1.07 4.58 0 5 4.27 5.64 7.33 5.64h4.26v2.75h-27.6zm52.75-34.46-13.26-38.54h-.3l-13.57 38.57z" fill="#f9a134"/></g></svg>' }} />
           <div style={{ width: 1, height: 32, background: 'rgba(255,255,255,0.2)' }} />
           <div>
-            <div style={{ fontSize: 20, fontWeight: 600, color: '#fff', lineHeight: 1.2 }}>Remote Sensing & Random Forest</div>
-            <div style={{ display: 'flex', gap: 6, marginTop: 5 }}>
-              {MODULES.map(m => (
+            <div style={{ fontSize: 20, fontWeight: 600, color: '#fff', lineHeight: 1.2 }}>Remote Sensing Playbook</div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
+              {MODULES.filter(m => m.id !== 'technical').map(m => (
                 <button key={m.id} onClick={() => switchModule(m.id)} style={{
                   padding: '3px 13px', borderRadius: 20, fontSize: 12, cursor: 'pointer',
                   fontFamily: 'inherit', fontWeight: currentModule === m.id ? 600 : 400,
@@ -4390,6 +4424,15 @@ function App() {
                   transition: 'all 0.18s',
                 }}>{m.label}</button>
               ))}
+              <div style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.18)', margin: '0 4px' }} />
+              <button onClick={() => switchModule('technical')} style={{
+                padding: '3px 13px', borderRadius: 20, fontSize: 12, cursor: 'pointer',
+                fontFamily: 'inherit', fontWeight: currentModule === 'technical' ? 600 : 400,
+                background: currentModule === 'technical' ? '#F9A134' : 'transparent',
+                color: currentModule === 'technical' ? '#fff' : '#F9A134',
+                border: `1px solid ${currentModule === 'technical' ? '#F9A134' : 'rgba(249,161,52,0.5)'}`,
+                transition: 'all 0.18s',
+              }}>Technical Reference & Field Guide</button>
             </div>
           </div>
         </div>
@@ -4421,7 +4464,7 @@ function App() {
 
           {/* Footer */}
           <div style={{ textAlign: 'center', padding: '40px 0 24px', fontSize: 13, color: '#aaa', borderTop: '1px solid #e0e0e0', marginTop: 40 }}>
-            ESA Remote Sensing &amp; Random Forest — {footerLabel}
+            ESA Remote Sensing Playbook | {footerLabel}
           </div>
         </main>
       </div>
